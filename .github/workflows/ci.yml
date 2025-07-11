@@ -164,6 +164,12 @@ jobs:
         env:
           CI_JOB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+
+          brew install meson ninja pkg-config freetype
+
+		  export JHBUILD_BATCH=1
+		  export JHBUILD_WRAP_MODE=forcefallback
+
           git clone $MM_REPO_URL mm
           git -C mm checkout $MM_REPO_REF
           git -C mm submodule update --recursive --init
