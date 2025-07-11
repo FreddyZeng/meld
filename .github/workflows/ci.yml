@@ -139,8 +139,8 @@ jobs:
       # You may need to adapt this to use GitHub Packages or another registry.
       # You must create CI_PROJECT_ID as a repository secret.
       PACKAGE_REGISTRY_URL: "${{ secrets.CI_API_V4_URL }}/projects/${{ secrets.CI_PROJECT_ID }}/packages/generic"
-      MM_REPO_URL: "https://gitlab.com/dehesselle/meld_macos.git"
-      MM_REPO_REF: "cf0d881d2bfdc1607f0e2bd11bcd9bd215e74f1b"
+      MM_REPO_URL: "https://github.com/FreddyZeng/meld_macOS.git"
+      MM_REPO_REF: "a78287dc1ea1e27e2d718d0c5db803ecd56c5bc9"
       MELD_BUILD: "${{ github.run_id }}"
       REP_DIR: "${{ github.workspace }}"
       SDKROOT: "/opt/sdks/MacOSX11.3.sdk"
