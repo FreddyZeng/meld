@@ -2,20 +2,23 @@ name: CI/CD Pipeline
 
 on:
   push:
+    # 仅在 main 分支上推送时触发
     branches: [ "main" ]
     tags:
       - '*'
   pull_request:
+    # 仅当拉取请求的目标是 main 分支时触发
     branches: [ "main" ]
 
-# 全局环境变量
+# Global environment variables
 env:
-  GNOME_SDK: 42
   FLATPAK_MODULE: "meld"
-  TARBALL_ARTIFACT_PATH: ".flatpak-builder/build/${{ env.FLATPAK_MODULE }}/_flatpak_build/meson-dist/${{ github.event.repository.name }}-${{ github.ref_name }}.tar.xz"
+  # TARBALL_ARTIFACT_PATH is defined without referencing other env variables
+  # The module name 'meld' is hardcoded here.
+  TARBALL_ARTIFACT_PATH: ".flatpak-builder/build/meld/_flatpak_build/meson-dist/${{ github.event.repository.name }}-${{ github.ref_name }}.tar.xz"
 
 jobs:
-  # Python 检查任务 (lint 和 pytest)
+  # Python checks (lint and pytest)
   python-checks:
     name: Python Checks (${{ matrix.check-name }})
     runs-on: ubuntu-latest
@@ -40,54 +43,51 @@ jobs:
       - name: Run ${{ matrix.check-name }}
         run: ${{ matrix.command }}
 
-  # Flatpak 构建任务
+  # Flatpak build task
   flatpak:
     name: Build Flatpak
     runs-on: ubuntu-latest
-    needs: python-checks # 依赖 python-checks 任务
+    needs: python-checks
+    # The GNOME_SDK version '42' is hardcoded directly into the image name
     container:
-      image: quay.io/gnome_infrastructure/gnome-runtime-images:gnome-${{ env.GNOME_SDK }}
+      image: quay.io/gnome_infrastructure/gnome-runtime-images:gnome-42
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 这里需要您将 .flatpak 扩展的脚本内容添加进来
-      # 例如：
-      # - name: Install Flatpak dependencies
-      #   run: |
-      #     # 安装 flatpak-builder 等相关依赖
-      #
+      # Note: The original GitLab CI included external files.
+      # You will need to add the specific build steps for Flatpak here.
       # - name: Build Flatpak bundle
       #   run: |
-      #     flatpak-builder --force-clean build-dir ${{ env.MANIFEST_PATH }}
-      #     flatpak build-bundle --repo=repo ${{ env.BUNDLE }} ${{ env.APP_ID }}
+      #     echo "Add your Flatpak build commands here"
+
     env:
       MANIFEST_PATH: "build-aux/org.gnome.Meld.Devel.json"
       RUNTIME_REPO: "https://nightly.gnome.org/gnome-nightly.flatpakrepo"
       APP_ID: "org.gnome.Meld.Devel"
       BUNDLE: "meld-dev.flatpak"
 
-  # Nightly 发布任务
+  # Nightly release task
   nightly:
     name: Publish Nightly
     runs-on: ubuntu-latest
-    needs: flatpak # 依赖 flatpak 任务
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master' # 仅在 master 分支推送时运行
+    needs: flatpak
+    # 仅在推送到 main 分支时运行
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
-      # 这里需要您将 .publish_nightly 扩展的脚本内容添加进来
+      # Note: The original GitLab CI included external files.
+      # You will need to add the specific publishing steps here.
       - name: Download Flatpak artifact
-        # 从 flatpak 任务下载产物
         uses: actions/download-artifact@v4
         with:
-          name: flatpak-bundle # 假设 flatpak 任务上传了一个名为 flatpak-bundle 的产物
+          name: flatpak-bundle # This name must match the name used in the flatpak job's upload-artifact step
           path: .
 
       - name: Publish to nightly repository
         run: |
-          # 发布到 nightly 仓库的脚本
           echo "Publishing..."
 
-  # MinGW-w64 (Windows) 构建任务
+  # MinGW-w64 (Windows) build task
   mingw64-dist:
     name: Build for Windows (MinGW-w64)
     runs-on: windows-latest
@@ -120,7 +120,7 @@ jobs:
         run: |
           glib-compile-schemas data
           python3 setup_win32.py bdist_dumb --bdist-dir build\bdist.mingw\msi --keep-temp bdist_msi --keep-temp
-        continue-on-error: true # 对应 allow_failure: true
+        continue-on-error: true # Corresponds to allow_failure: true
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
@@ -128,14 +128,17 @@ jobs:
           name: dist-windows-${{ github.ref_name }}
           path: dist/
 
-  # macOS 构建任务
+  # macOS build task
   macos:
     name: Build for macOS
-    runs-on: macos-latest # 注意：GitHub Actions 的 arm64 macOS runner 目前是 large runner，可能需要付费
+    runs-on: macos-latest
     env:
       CCACHE_DIR: "${{ github.workspace }}/ccache"
       CCACHE_MAXSIZE: "300Mi"
-      PACKAGE_REGISTRY_URL: "${{ secrets.CI_API_V4_URL }}/projects/${{ secrets.CI_PROJECT_ID }}/packages/generic" # 需要设置 Secrets
+      # Note: The following URL is specific to GitLab's package registry.
+      # You may need to adapt this to use GitHub Packages or another registry.
+      # You must create CI_PROJECT_ID as a repository secret.
+      PACKAGE_REGISTRY_URL: "${{ secrets.CI_API_V4_URL }}/projects/${{ secrets.CI_PROJECT_ID }}/packages/generic"
       MM_REPO_URL: "https://gitlab.com/dehesselle/meld_macos.git"
       MM_REPO_REF: "cf0d881d2bfdc1607f0e2bd11bcd9bd215e74f1b"
       MELD_BUILD: "${{ github.run_id }}"
@@ -154,8 +157,9 @@ jobs:
             ${{ runner.os }}-ccache-
 
       - name: Build and handle dependencies
+        # The script expects CI_JOB_TOKEN. We pass the GitHub token to it.
         env:
-          CI_JOB_TOKEN: ${{ secrets.CI_JOB_TOKEN }} # 需要设置名为 CI_JOB_TOKEN 的 Secret
+          CI_JOB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git clone $MM_REPO_URL mm
           git -C mm checkout $MM_REPO_REF
@@ -166,6 +170,8 @@ jobs:
           VER_DIR=$(mm/jhb/usr/bin/config get VER_DIR)
           PACKAGE_URL=${PACKAGE_REGISTRY_URL}/dependencies/${MM_SHA}/$(basename $VER_DIR)_$(uname -m).dmg
 
+          # The script uses a GitLab-specific Package Registry URL.
+          # The curl command requires secrets CI_API_V4_URL and CI_PROJECT_ID to be set in your repository.
           if ! curl -H "JOB-TOKEN: $CI_JOB_TOKEN" -fLO $PACKAGE_URL; then
             mm/build_toolset.sh
             mm/jhb/usr/bin/jhb run rustup self uninstall -y || true
@@ -185,6 +191,6 @@ jobs:
           path: Meld*.dmg
 
       - name: Cleanup after build
-        if: always() # 确保在任务成功或失败时都运行
+        if: always() # Ensure this step runs even if the build fails
         run: |
           mm/jhb/usr/bin/archive uninstall_dmg
