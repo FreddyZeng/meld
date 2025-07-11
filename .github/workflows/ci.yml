@@ -1,0 +1,190 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+    tags:
+      - '*'
+  pull_request:
+    branches: [ "main" ]
+
+# 全局环境变量
+env:
+  GNOME_SDK: 42
+  FLATPAK_MODULE: "meld"
+  TARBALL_ARTIFACT_PATH: ".flatpak-builder/build/${{ env.FLATPAK_MODULE }}/_flatpak_build/meson-dist/${{ github.event.repository.name }}-${{ github.ref_name }}.tar.xz"
+
+jobs:
+  # Python 检查任务 (lint 和 pytest)
+  python-checks:
+    name: Python Checks (${{ matrix.check-name }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - check-name: "lint"
+            command: "pre-commit run --all-files --show-diff-on-failure"
+          - check-name: "pytest"
+            command: "pytest"
+    container:
+      image: registry.fedoraproject.org/fedora:latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          dnf install -y git glib2 gtk3 gtksourceview4 python3-cairo python3-pip python3-gobject-base
+          pip3 install -r dev-requirements.txt
+
+      - name: Run ${{ matrix.check-name }}
+        run: ${{ matrix.command }}
+
+  # Flatpak 构建任务
+  flatpak:
+    name: Build Flatpak
+    runs-on: ubuntu-latest
+    needs: python-checks # 依赖 python-checks 任务
+    container:
+      image: quay.io/gnome_infrastructure/gnome-runtime-images:gnome-${{ env.GNOME_SDK }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 这里需要您将 .flatpak 扩展的脚本内容添加进来
+      # 例如：
+      # - name: Install Flatpak dependencies
+      #   run: |
+      #     # 安装 flatpak-builder 等相关依赖
+      #
+      # - name: Build Flatpak bundle
+      #   run: |
+      #     flatpak-builder --force-clean build-dir ${{ env.MANIFEST_PATH }}
+      #     flatpak build-bundle --repo=repo ${{ env.BUNDLE }} ${{ env.APP_ID }}
+    env:
+      MANIFEST_PATH: "build-aux/org.gnome.Meld.Devel.json"
+      RUNTIME_REPO: "https://nightly.gnome.org/gnome-nightly.flatpakrepo"
+      APP_ID: "org.gnome.Meld.Devel"
+      BUNDLE: "meld-dev.flatpak"
+
+  # Nightly 发布任务
+  nightly:
+    name: Publish Nightly
+    runs-on: ubuntu-latest
+    needs: flatpak # 依赖 flatpak 任务
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master' # 仅在 master 分支推送时运行
+    steps:
+      # 这里需要您将 .publish_nightly 扩展的脚本内容添加进来
+      - name: Download Flatpak artifact
+        # 从 flatpak 任务下载产物
+        uses: actions/download-artifact@v4
+        with:
+          name: flatpak-bundle # 假设 flatpak 任务上传了一个名为 flatpak-bundle 的产物
+          path: .
+
+      - name: Publish to nightly repository
+        run: |
+          # 发布到 nightly 仓库的脚本
+          echo "Publishing..."
+
+  # MinGW-w64 (Windows) 构建任务
+  mingw64-dist:
+    name: Build for Windows (MinGW-w64)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-adwaita-icon-theme
+            mingw-w64-x86_64-gsettings-desktop-schemas
+            mingw-w64-x86_64-gtk-update-icon-cache
+            mingw-w64-x86_64-gtk3
+            mingw-w64-x86_64-gtksourceview4
+            mingw-w64-x86_64-python-cx-freeze
+            mingw-w64-x86_64-python-gobject
+            mingw-w64-x86_64-python-pytest
+            mingw-w64-x86_64-python-setuptools
+            glib2-devel
+            intltool
+
+      - name: Build MSI installer
+        run: |
+          glib-compile-schemas data
+          python3 setup_win32.py bdist_dumb --bdist-dir build\bdist.mingw\msi --keep-temp bdist_msi --keep-temp
+        continue-on-error: true # 对应 allow_failure: true
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-windows-${{ github.ref_name }}
+          path: dist/
+
+  # macOS 构建任务
+  macos:
+    name: Build for macOS
+    runs-on: macos-latest # 注意：GitHub Actions 的 arm64 macOS runner 目前是 large runner，可能需要付费
+    env:
+      CCACHE_DIR: "${{ github.workspace }}/ccache"
+      CCACHE_MAXSIZE: "300Mi"
+      PACKAGE_REGISTRY_URL: "${{ secrets.CI_API_V4_URL }}/projects/${{ secrets.CI_PROJECT_ID }}/packages/generic" # 需要设置 Secrets
+      MM_REPO_URL: "https://gitlab.com/dehesselle/meld_macos.git"
+      MM_REPO_REF: "cf0d881d2bfdc1607f0e2bd11bcd9bd215e74f1b"
+      MELD_BUILD: "${{ github.run_id }}"
+      REP_DIR: "${{ github.workspace }}"
+      SDKROOT: "/opt/sdks/MacOSX11.3.sdk"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ runner.os }}-ccache-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-
+
+      - name: Build and handle dependencies
+        env:
+          CI_JOB_TOKEN: ${{ secrets.CI_JOB_TOKEN }} # 需要设置名为 CI_JOB_TOKEN 的 Secret
+        run: |
+          git clone $MM_REPO_URL mm
+          git -C mm checkout $MM_REPO_REF
+          git -C mm submodule update --recursive --init
+
+          echo $GITHUB_WORKSPACE > mm/ci_project_dir.txt
+          MM_SHA=$(LANG=C find -s mm -type f -not -wholename '*.git/*' -exec cat {} + | shasum | awk '{ print $1 }')
+          VER_DIR=$(mm/jhb/usr/bin/config get VER_DIR)
+          PACKAGE_URL=${PACKAGE_REGISTRY_URL}/dependencies/${MM_SHA}/$(basename $VER_DIR)_$(uname -m).dmg
+
+          if ! curl -H "JOB-TOKEN: $CI_JOB_TOKEN" -fLO $PACKAGE_URL; then
+            mm/build_toolset.sh
+            mm/jhb/usr/bin/jhb run rustup self uninstall -y || true
+            mm/jhb/usr/bin/archive remove_nonessentials
+            mm/jhb/usr/bin/archive create_dmg
+            curl --fail-with-body -H "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file $(basename $PACKAGE_URL) $PACKAGE_URL
+            rm -rf ${VER_DIR:?}
+          fi
+
+          mm/jhb/usr/bin/archive install_dmg
+          mm/build_meld.sh
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Meld-macOS
+          path: Meld*.dmg
+
+      - name: Cleanup after build
+        if: always() # 确保在任务成功或失败时都运行
+        run: |
+          mm/jhb/usr/bin/archive uninstall_dmg
