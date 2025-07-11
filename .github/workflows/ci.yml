@@ -3,12 +3,11 @@ name: CI/CD Pipeline
 on:
   push:
     # 仅在 main 分支上推送时触发
-    branches: [ "main" ]
-    tags:
-      - '*'
+    branches: ["main"]
+    tags: ['*']
   pull_request:
     # 仅当拉取请求的目标是 main 分支时触发
-    branches: [ "main" ]
+    branches: ["main"]
 
 # Global environment variables
 env:
@@ -48,19 +47,16 @@ jobs:
     name: Build Flatpak
     runs-on: ubuntu-latest
     needs: python-checks
-    # The GNOME_SDK version '42' is hardcoded directly into the image name
     container:
       image: quay.io/gnome_infrastructure/gnome-runtime-images:gnome-42
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Note: The original GitLab CI included external files.
-      # You will need to add the specific build steps for Flatpak here.
+      # 添加 Flatpak 构建命令
       # - name: Build Flatpak bundle
       #   run: |
       #     echo "Add your Flatpak build commands here"
-
     env:
       MANIFEST_PATH: "build-aux/org.gnome.Meld.Devel.json"
       RUNTIME_REPO: "https://nightly.gnome.org/gnome-nightly.flatpakrepo"
@@ -72,15 +68,12 @@ jobs:
     name: Publish Nightly
     runs-on: ubuntu-latest
     needs: flatpak
-    # 仅在推送到 main 分支时运行
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
-      # Note: The original GitLab CI included external files.
-      # You will need to add the specific publishing steps here.
       - name: Download Flatpak artifact
         uses: actions/download-artifact@v4
         with:
-          name: flatpak-bundle # This name must match the name used in the flatpak job's upload-artifact step
+          name: flatpak-bundle
           path: .
 
       - name: Publish to nightly repository
@@ -104,23 +97,23 @@ jobs:
           msystem: MINGW64
           update: true
           install: >-
-            mingw-w64-x86_64-adwaita-icon-theme
-            mingw-w64-x86_64-gsettings-desktop-schemas
-            mingw-w64-x86_64-gtk-update-icon-cache
-            mingw-w64-x86_64-gtk3
-            mingw-w64-x86_64-gtksourceview4
-            mingw-w64-x86_64-python-cx-freeze
-            mingw-w64-x86_64-python-gobject
-            mingw-w64-x86_64-python-pytest
-            mingw-w64-x86_64-python-setuptools
-            glib2-devel
+            mingw-w64-x86_64-adwaita-icon-theme \
+            mingw-w64-x86_64-gsettings-desktop-schemas \
+            mingw-w64-x86_64-gtk-update-icon-cache \
+            mingw-w64-x86_64-gtk3 \
+            mingw-w64-x86_64-gtksourceview4 \
+            mingw-w64-x86_64-python-cx-freeze \
+            mingw-w64-x86_64-python-gobject \
+            mingw-w64-x86_64-python-pytest \
+            mingw-w64-x86_64-python-setuptools \
+            glib2-devel \
             intltool
 
       - name: Build MSI installer
         run: |
           glib-compile-schemas data
           python3 setup_win32.py bdist_dumb --bdist-dir build\bdist.mingw\msi --keep-temp bdist_msi --keep-temp
-        continue-on-error: true # Corresponds to allow_failure: true
+        continue-on-error: true
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
@@ -135,19 +128,17 @@ jobs:
     env:
       CCACHE_DIR: "${{ github.workspace }}/ccache"
       CCACHE_MAXSIZE: "300Mi"
-      # Note: The following URL is specific to GitLab's package registry.
-      # You may need to adapt this to use GitHub Packages or another registry.
-      # You must create CI_PROJECT_ID as a repository secret.
+      # 注意：请根据需要配置 PACKAGE_REGISTRY_URL
       PACKAGE_REGISTRY_URL: "${{ secrets.CI_API_V4_URL }}/projects/${{ secrets.CI_PROJECT_ID }}/packages/generic"
       MM_REPO_URL: "https://github.com/FreddyZeng/meld_macOS.git"
       MM_REPO_REF: "42c84b3f9f78d9e560fbf187eaa1f5588f536792"
       MELD_BUILD: "${{ github.run_id }}"
       REP_DIR: "${{ github.workspace }}"
-      # SDKROOT intentionally omitted; Xcode auto-selects latest
     steps:
       - name: Install build tools
         run: |
-          brew install meson ninja pkg-config freetype
+          brew update
+          brew install python3 meson ninja pkg-config freetype
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -164,35 +155,43 @@ jobs:
             ${{ runner.os }}-ccache-
 
       - name: Build and handle dependencies
-        env:
-          CI_JOB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        id: build_macos
         run: |
-          # 确保 Meson/Ninja/PKG-CONFIG 可用
-          brew install meson ninja pkg-config freetype
+          export SDKROOT=$(xcrun --sdk macosx --show-sdk-path)
+          export CFLAGS="-isysroot $SDKROOT"
+          export CPPFLAGS="-isysroot $SDKROOT"
 
-          export JHBUILD_BATCH=1
-          export JHBUILD_WRAP_MODE=forcefallback
-
-          git clone $MM_REPO_URL mm
-          git -C mm checkout $MM_REPO_REF
+          git clone "$MM_REPO_URL" mm
+          git -C mm checkout "$MM_REPO_REF"
           git -C mm submodule update --recursive --init
 
-          echo $GITHUB_WORKSPACE > mm/ci_project_dir.txt
+          echo "$GITHUB_WORKSPACE" > mm/ci_project_dir.txt
           MM_SHA=$(LANG=C find -s mm -type f -not -wholename '*.git/*' -exec cat {} + | shasum | awk '{ print $1 }')
           VER_DIR=$(mm/jhb/usr/bin/config get VER_DIR)
-          PACKAGE_URL=${PACKAGE_REGISTRY_URL}/dependencies/${MM_SHA}/$(basename $VER_DIR)_$(uname -m).dmg
+          PACKAGE_URL=${PACKAGE_REGISTRY_URL}/dependencies/${MM_SHA}/$(basename "$VER_DIR")_$(uname -m).dmg
 
-          if ! curl -H "JOB-TOKEN: $CI_JOB_TOKEN" -fLO $PACKAGE_URL; then
+          if ! curl -H "JOB-TOKEN: $CI_JOB_TOKEN" -fLO "$PACKAGE_URL"; then
             mm/build_toolset.sh
             mm/jhb/usr/bin/jhb run rustup self uninstall -y || true
             mm/jhb/usr/bin/archive remove_nonessentials
             mm/jhb/usr/bin/archive create_dmg
-            curl --fail-with-body -H "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file $(basename $PACKAGE_URL) $PACKAGE_URL
-            rm -rf ${VER_DIR:?}
+            curl --fail-with-body -H "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file "$(basename "$PACKAGE_URL")" "$PACKAGE_URL"
+            rm -rf "${VER_DIR:?}"
           fi
 
           mm/jhb/usr/bin/archive install_dmg
           mm/build_meld.sh
+
+      - name: Display HarfBuzz Meson build log on failure
+        if: ${{ steps.build_macos.outcome == 'failure' }}
+        run: |
+          echo "============================================================"
+          echo " HarfBuzz Meson build failed. Dumping logs..."
+          echo "============================================================"
+          find ${{ github.workspace }} -type f -name "meson-log.txt" -exec echo "--- Found: {} ---" \; -exec cat {} \;
+          echo "============================================================"
+          echo " End of HarfBuzz Meson logs"
+          echo "============================================================"
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
