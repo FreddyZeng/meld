@@ -143,8 +143,12 @@ jobs:
       MM_REPO_REF: "a78287dc1ea1e27e2d718d0c5db803ecd56c5bc9"
       MELD_BUILD: "${{ github.run_id }}"
       REP_DIR: "${{ github.workspace }}"
-      #SDKROOT: "/opt/sdks/MacOSX11.3.sdk"
+      # SDKROOT intentionally omitted; Xcode auto-selects latest
     steps:
+      - name: Install build tools
+        run: |
+          brew install meson ninja pkg-config freetype
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -160,15 +164,14 @@ jobs:
             ${{ runner.os }}-ccache-
 
       - name: Build and handle dependencies
-        # The script expects CI_JOB_TOKEN. We pass the GitHub token to it.
         env:
           CI_JOB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-
+          # 确保 Meson/Ninja/PKG-CONFIG 可用
           brew install meson ninja pkg-config freetype
 
-		  export JHBUILD_BATCH=1
-		  export JHBUILD_WRAP_MODE=forcefallback
+          export JHBUILD_BATCH=1
+          export JHBUILD_WRAP_MODE=forcefallback
 
           git clone $MM_REPO_URL mm
           git -C mm checkout $MM_REPO_REF
@@ -179,8 +182,6 @@ jobs:
           VER_DIR=$(mm/jhb/usr/bin/config get VER_DIR)
           PACKAGE_URL=${PACKAGE_REGISTRY_URL}/dependencies/${MM_SHA}/$(basename $VER_DIR)_$(uname -m).dmg
 
-          # The script uses a GitLab-specific Package Registry URL.
-          # The curl command requires secrets CI_API_V4_URL and CI_PROJECT_ID to be set in your repository.
           if ! curl -H "JOB-TOKEN: $CI_JOB_TOKEN" -fLO $PACKAGE_URL; then
             mm/build_toolset.sh
             mm/jhb/usr/bin/jhb run rustup self uninstall -y || true
@@ -200,6 +201,7 @@ jobs:
           path: Meld*.dmg
 
       - name: Cleanup after build
-        if: always() # Ensure this step runs even if the build fails
+        if: always()
         run: |
           mm/jhb/usr/bin/archive uninstall_dmg
+
